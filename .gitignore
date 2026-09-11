@@ -1,0 +1,10 @@
+# Raw and intermediate data files — too large for GitHub, regenerate from source
+*.pgn
+*.pgn.zst
+lichess_2016-06_parsed.csv
+lichess_2016-06_evaluated_games.csv
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
