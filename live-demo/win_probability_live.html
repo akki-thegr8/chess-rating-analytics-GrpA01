@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rating-Aware Win Probability - Live Play</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<style>
+  :root {
+    --bg: #1b1b1f;
+    --panel: #26262c;
+    --border: #3a3a42;
+    --text: #e8e6e1;
+    --muted: #9a9aa2;
+    --light-sq: #eef0e6;
+    --dark-sq: #6c8a5a;
+    --highlight: #2a78d6;
+    --accent: #d6942a;
+    --danger: #b5473f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+    margin: 0;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 6px; text-align: center; max-width: 480px; }
+  .source-note { color: var(--accent); font-size: 11px; margin-bottom: 16px; text-align: center; }
+  .opening-strip {
+    color: var(--muted);
+    font-size: 11px;
+    text-align: center;
+    max-width: 700px;
+    margin: 0 auto 12px;
+    line-height: 1.6;
+  }
+  .opening-strip .chip { color: var(--text); }
+  .opening-strip .chip-pct { color: var(--accent); font-weight: 600; }
+  .opening-strip .sep { color: var(--border); margin: 0 6px; }
+  .engine-status { font-size: 12px; margin-bottom: 12px; padding: 4px 10px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); }
+  .engine-status.ready { color: #7fb069; }
+  .engine-status.busy { color: var(--accent); }
+  .layout { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, 52px);
+    grid-template-rows: repeat(8, 52px);
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .sq { display: flex; align-items: center; justify-content: center; font-size: 34px; position: relative; cursor: default; user-select: none; }
+  .sq.light { background: var(--light-sq); }
+  .sq.dark { background: var(--dark-sq); }
+  .piece-white {
+    color: #ffffff;
+    text-shadow: 0 0 2px #000, 0 0 3px #000, 0 1px 1px #000;
+  }
+  .piece-black {
+    color: #111111;
+    text-shadow: 0 0 2px #fff, 0 0 3px #fff;
+  }
+  .sq.selectable { cursor: pointer; }
+  .sq.selected { outline: 3px solid var(--highlight); outline-offset: -3px; }
+  .sq.has-great::before {
+    content: "";
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #7fb069;
+  }
+  .sq.has-blunder-risk::before {
+    content: "";
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
+  .sq.legal-target { cursor: pointer; }
+  .sq.legal-target::after {
+    content: "";
+    position: absolute;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: rgba(42, 120, 214, 0.55);
+  }
+  .win-badge {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    font-size: 9px;
+    background: rgba(0,0,0,0.72);
+    color: #fff;
+    padding: 1px 3px;
+    border-radius: 3px;
+    line-height: 1.2;
+  }
+  .win-badge.pending { color: var(--muted); }
+  .win-badge.tag-blunder { background: rgba(181, 71, 63, 0.85); }
+  .win-badge.tag-great { background: rgba(127, 176, 105, 0.85); }
+  .tag {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .tag-blunder { background: rgba(181, 71, 63, 0.25); color: #ff8a80; }
+  .tag-great { background: rgba(127, 176, 105, 0.25); color: #9ddc84; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    width: 260px;
+  }
+  .panel h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  select, button {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 13px;
+    margin-bottom: 12px;
+    cursor: pointer;
+  }
+  button { font-weight: 600; }
+  button:hover { border-color: var(--highlight); }
+  .move-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+  .move-row.top { background: rgba(214, 148, 42, 0.15); border: 1px solid rgba(214, 148, 42, 0.4); }
+  .move-san { font-weight: 600; }
+  .move-pct { color: var(--accent); font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+  .turn-banner { font-size: 13px; margin-bottom: 10px; padding: 6px 10px; background: var(--bg); border-radius: 6px; text-align: center; }
+  .game-over-banner { font-size: 13px; margin-bottom: 10px; padding: 8px 10px; background: rgba(181, 71, 63, 0.2); border: 1px solid var(--danger); border-radius: 6px; text-align: center; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Rating-Aware Win Probability &mdash; Live Play</h1>
+<p class="subtitle">Every legal move for the side to move is evaluated live, with blunders and great moves flagged — adjusted for the selected rating band.</p>
+<p class="source-note">Win % calibrated from 765,433 real evaluated Lichess games</p>
+<p id="openingStatsLine" class="opening-strip">Loading popular openings&hellip;</p>
+<div id="engineStatus" class="engine-status busy">Loading engine&hellip;</div>
+
+<div class="layout">
+  <div>
+    <div id="turnBanner" class="turn-banner">White to move</div>
+    <div id="board"></div>
+  </div>
+  <div class="panel">
+    <h2>Rating band</h2>
+    <select id="bandSelect">
+      <option value="&lt;1200">Under 1200</option>
+      <option value="1200-1600">1200 &ndash; 1600</option>
+      <option value="1600-2000" selected>1600 &ndash; 2000</option>
+      <option value="2000-2400">2000 &ndash; 2400</option>
+      <option value="2400+">2400+</option>
+    </select>
+    <button id="resetBtn">New Game</button>
+    <h2>Legal moves</h2>
+    <div id="moveList"><p class="hint">Click a piece on the board to see its options.</p></div>
+  </div>
+</div>
+
+<script>
+const PIECE_UNICODE = {
+  p: "\u265F", n: "\u265E", b: "\u265D", r: "\u265C", q: "\u265B", k: "\u265A",
+  P: "\u2659", N: "\u2658", B: "\u2657", R: "\u2656", Q: "\u2655", K: "\u2654"
+};
+
+// ---------------------------------------------------------------------
+// Rating-band calibration table, same values as generate_win_probabilities.py
+// (exported from the Databricks analysis of 765,433 evaluated games).
+// ---------------------------------------------------------------------
+const RATING_BANDS = ["<1200", "1200-1600", "1600-2000", "2000-2400", "2400+"];
+
+const EVAL_BUCKETS = [
+  { max: -500, label: "< -500" },
+  { max: -300, label: "-500 to -300" },
+  { max: -100, label: "-300 to -100" },
+  { max: 100,  label: "-100 to +100" },
+  { max: 300,  label: "+100 to +300" },
+  { max: 500,  label: "+300 to +500" },
+  { max: Infinity, label: "> +500" }
+];
+
+// Fallback values (same shape as the real table) used only if
+// calibration_table.csv can't be fetched - e.g. before you've exported it
+// from Databricks yet, or if this page is opened without a local server.
+const FALLBACK_CALIBRATION_TABLE = {
+  "< -500|<1200": 20.2, "< -500|1200-1600": 15.8, "< -500|1600-2000": 13.4, "< -500|2000-2400": 9.9, "< -500|2400+": 8.2,
+  "-500 to -300|<1200": 35.5, "-500 to -300|1200-1600": 29.7, "-500 to -300|1600-2000": 25.2, "-500 to -300|2000-2400": 19.3, "-500 to -300|2400+": 14.6,
+  "-300 to -100|<1200": 40.1, "-300 to -100|1200-1600": 36.3, "-300 to -100|1600-2000": 32.4, "-300 to -100|2000-2400": 26.7, "-300 to -100|2400+": 21.3,
+  "-100 to +100|<1200": 47.6, "-100 to +100|1200-1600": 48.3, "-100 to +100|1600-2000": 47.7, "-100 to +100|2000-2400": 46.9, "-100 to +100|2400+": 45.3,
+  "+100 to +300|<1200": 56.5, "+100 to +300|1200-1600": 60.2, "+100 to +300|1600-2000": 63.1, "+100 to +300|2000-2400": 67.6, "+100 to +300|2400+": 70.1,
+  "+300 to +500|<1200": 60.9, "+300 to +500|1200-1600": 67.3, "+300 to +500|1600-2000": 71.3, "+300 to +500|2000-2400": 77.5, "+300 to +500|2400+": 81.3,
+  "> +500|<1200": 76.3, "> +500|1200-1600": 81.1, "> +500|1600-2000": 84.1, "> +500|2000-2400": 87.8, "> +500|2400+": 87.7
+};
+
+// This is populated at page load by fetching calibration_table.csv -
+// the SAME file exported from Databricks and used by the Python script.
+// This is the real, live link between your Spark analysis and this page.
+let CALIBRATION_TABLE = {};
+let calibrationSource = "not loaded yet";
+
+async function loadCalibrationTable() {
+  try {
+    const response = await fetch("calibration_table.csv");
+    if (!response.ok) throw new Error("File not found (status " + response.status + ")");
+    const text = await response.text();
+    const lines = text.trim().split("\n");
+    const headerCols = lines[0].split(",").map(c => c.trim());
+    const bucketIdx = headerCols.indexOf("eval_bucket");
+    const bandIdx = headerCols.indexOf("rating_band");
+    const winColIdx = headerCols.findIndex(c => c.toLowerCase().includes("white_won"));
+
+    if (bucketIdx === -1 || bandIdx === -1 || winColIdx === -1) {
+      throw new Error("CSV columns didn't match expected shape (eval_bucket, rating_band, avg(white_won))");
+    }
+
+    const table = {};
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      if (cols.length < headerCols.length) continue;
+      const bucket = cols[bucketIdx].trim();
+      const band = cols[bandIdx].trim();
+      const winFraction = parseFloat(cols[winColIdx]);
+      table[bucket + "|" + band] = Math.round(winFraction * 100 * 10) / 10; // Spark's avg() is 0-1
+    }
+
+    CALIBRATION_TABLE = table;
+    calibrationSource = "live (calibration_table.csv, " + Object.keys(table).length + " entries)";
+  } catch (err) {
+    console.warn("Could not load calibration_table.csv, using fallback values:", err);
+    CALIBRATION_TABLE = FALLBACK_CALIBRATION_TABLE;
+    calibrationSource = "fallback (CSV not found - see chat)";
+  }
+}
+
+function getEvalBucket(cp) {
+  for (const b of EVAL_BUCKETS) { if (cp < b.max) return b.label; }
+  return "> +500";
+}
+
+function centipawnsToWinPct(cp) {
+  return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+}
+
+// Returns White's win % for this position eval + rating band.
+function whiteWinPct(cp, band) {
+  const key = getEvalBucket(cp) + "|" + band;
+  return CALIBRATION_TABLE.hasOwnProperty(key) ? CALIBRATION_TABLE[key] : centipawnsToWinPct(cp);
+}
+
+// ---------------------------------------------------------------------
+// Stockfish engine wrapper (runs entirely in-browser via WebAssembly/asm.js,
+// loaded as a Web Worker - no server, no Python, live evaluation on click).
+// ---------------------------------------------------------------------
+const ENGINE_URL = "stockfish.js"; // must be downloaded next to this HTML file - see chat for the curl command
+const SEARCH_DEPTH = 10; // kept modest so a batch of ~20-30 moves evaluates in a reasonable time
+
+let engine = null;
+let engineReady = false;
+const statusEl = document.getElementById("engineStatus");
+
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = "engine-status " + cls;
+}
+
+function initEngine() {
+  return new Promise((resolve) => {
+    try {
+      engine = new Worker(ENGINE_URL);
+      engine.onmessage = (e) => {
+        const line = typeof e.data === "string" ? e.data : e.data.data;
+        if (line === "uciok") {
+          engine.postMessage("isready");
+        } else if (line === "readyok") {
+          engineReady = true;
+          setStatus("Engine ready \u2014 " + calibrationSource, "ready");
+          resolve();
+        }
+      };
+      engine.onerror = (err) => {
+        console.error("Stockfish worker failed to load:", err);
+        setStatus("stockfish.js not found next to this HTML file - see chat for the curl command", "busy");
+        resolve(); // resolve anyway so startUp() doesn't hang forever
+      };
+      engine.postMessage("uci");
+    } catch (err) {
+      console.error("Could not create engine worker:", err);
+      setStatus("Engine failed to load - try running via a local server (see chat)", "busy");
+      resolve();
+    }
+  });
+}
+
+// Evaluates a single FEN at SEARCH_DEPTH, returns a Promise resolving to
+// { cp } - the centipawn score from the perspective of the side to move
+// IN THAT FEN. Mate scores are converted to a large fixed cp value.
+function evaluateFen(fen) {
+  return new Promise((resolve) => {
+    let lastCp = 0;
+    const listener = (e) => {
+      const line = typeof e.data === "string" ? e.data : e.data.data;
+      const cpMatch = line.match(/score cp (-?\d+)/);
+      const mateMatch = line.match(/score mate (-?\d+)/);
+      if (mateMatch) {
+        const mateIn = parseInt(mateMatch[1], 10);
+        lastCp = mateIn > 0 ? 10000 : -10000;
+      } else if (cpMatch) {
+        lastCp = parseInt(cpMatch[1], 10);
+      }
+      if (line.startsWith("bestmove")) {
+        engine.removeEventListener("message", listener);
+        resolve(lastCp);
+      }
+    };
+    engine.addEventListener("message", listener);
+    engine.postMessage("position fen " + fen);
+    engine.postMessage("go depth " + SEARCH_DEPTH);
+  });
+}
+
+// Opening stats: top openings by popularity per rating band, from the
+// same Databricks analysis. Loaded live from opening_stats.csv, same
+// pattern as the calibration table.
+let OPENING_STATS = [];
+let openingStatsSource = "not loaded yet";
+
+async function loadOpeningStats() {
+  try {
+    const response = await fetch("opening_stats.csv");
+    if (!response.ok) throw new Error("File not found (status " + response.status + ")");
+    const text = await response.text();
+    const lines = text.trim().split("\n");
+    const headerCols = lines[0].split(",").map(c => c.trim());
+    const idx = {
+      eco: headerCols.indexOf("eco"),
+      opening: headerCols.indexOf("opening"),
+      band: headerCols.indexOf("rating_band"),
+      games: headerCols.indexOf("games"),
+      winRate: headerCols.indexOf("white_win_rate"),
+      pct: headerCols.indexOf("pct_of_band"),
+    };
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      if (cols.length < headerCols.length) continue;
+      rows.push({
+        eco: cols[idx.eco].trim(),
+        opening: cols[idx.opening].trim(),
+        band: cols[idx.band].trim(),
+        games: parseInt(cols[idx.games], 10),
+        winRate: parseFloat(cols[idx.winRate]) * 100,
+        pct: parseFloat(cols[idx.pct]),
+      });
+    }
+    OPENING_STATS = rows;
+    openingStatsSource = "live (" + rows.length + " rows)";
+  } catch (err) {
+    console.warn("Could not load opening_stats.csv:", err);
+    OPENING_STATS = [];
+    openingStatsSource = "not available";
+  }
+}
+
+function renderOpeningStats() {
+  const strip = document.getElementById("openingStatsLine");
+  if (!strip) return;
+  const band = bandSelect.value;
+  const rows = OPENING_STATS
+    .filter(r => r.band === band)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 4);
+
+  if (rows.length === 0) {
+    strip.textContent = "No opening data loaded for this band.";
+    return;
+  }
+
+  const parts = rows.map(r => {
+    const name = r.opening.length > 24 ? r.opening.slice(0, 22) + "\u2026" : r.opening;
+    return `<span class="chip">${name}</span> <span class="chip-pct">${r.pct.toFixed(1)}%\u00b7${r.winRate.toFixed(0)}%W</span>`;
+  });
+
+  strip.innerHTML = "Popular at this band: " + parts.join('<span class="sep">|</span>');
+}
+
+// ---------------------------------------------------------------------
+// Game state and board rendering
+// ---------------------------------------------------------------------
+const game = new Chess();
+let selectedSquare = null;
+let currentMoveEvals = []; // ALL legal moves for the side to move, evaluated every turn
+let evaluating = false;
+let baselineMoverPct = null; // the mover's win% in the CURRENT position, before any move
+
+// A move is flagged "Blunder" if it leaves the mover's win% below this
+// absolute floor, or "Great move" if it pushes it above this ceiling -
+// absolute thresholds, not a swing from the current position's baseline
+// (a swing-based rule flagged almost every ordinary move as a "drop"
+// whenever the starting position already had an above-average win%).
+const BLUNDER_MAX_PCT = 25;
+const GREAT_MIN_PCT = 75;
+
+const boardEl = document.getElementById("board");
+const moveListEl = document.getElementById("moveList");
+const bandSelect = document.getElementById("bandSelect");
+const turnBanner = document.getElementById("turnBanner");
+const resetBtn = document.getElementById("resetBtn");
+
+function squareId(fileIdx, rankIdx) {
+  return "abcdefgh"[fileIdx] + (8 - rankIdx);
+}
+
+function updateTurnBanner() {
+  if (game.in_checkmate()) {
+    turnBanner.textContent = (game.turn() === "w" ? "Black" : "White") + " wins by checkmate";
+    turnBanner.className = "game-over-banner";
+  } else if (game.in_draw() || game.in_stalemate() || game.in_threefold_repetition()) {
+    turnBanner.textContent = "Game drawn";
+    turnBanner.className = "game-over-banner";
+  } else {
+    turnBanner.textContent = (game.turn() === "w" ? "White" : "Black") + " to move";
+    turnBanner.className = "turn-banner";
+  }
+}
+
+function moveDelta(entry, band) {
+  const whitePct = whiteWinPct(entry.cp, band);
+  const moverPct = entry.movingSide === "w" ? whitePct : (100 - whitePct);
+  return baselineMoverPct === null ? 0 : (moverPct - baselineMoverPct);
+}
+
+function moveMoverPct(entry, band) {
+  const whitePct = whiteWinPct(entry.cp, band);
+  return entry.movingSide === "w" ? whitePct : (100 - whitePct);
+}
+
+function tagFor(moverPct) {
+  if (moverPct <= BLUNDER_MAX_PCT) return { label: "Blunder", cls: "tag-blunder" };
+  if (moverPct >= GREAT_MIN_PCT) return { label: "Great move", cls: "tag-great" };
+  return null;
+}
+
+// Evaluates the CURRENT position (no move made) to establish the mover's
+// baseline win% - everything else is measured as a swing from this number.
+async function evaluateBaseline() {
+  const cpFromMoverPerspective = await evaluateFen(game.fen());
+  const band = bandSelect.value;
+  const whitePct = whiteWinPct(cpFromMoverPerspective, band);
+  baselineMoverPct = game.turn() === "w" ? whitePct : (100 - whitePct);
+}
+
+// Evaluates EVERY legal move for the side to move (not just one piece),
+// so the full ranked, flagged list is ready before any piece is clicked.
+async function evaluateAllMoves() {
+  if (game.game_over()) { currentMoveEvals = []; renderBoard(); return; }
+
+  evaluating = true;
+  const mover = game.turn();
+  setStatus("Evaluating position\u2026", "busy");
+  renderBoard();
+
+  await evaluateBaseline();
+
+  const verboseMoves = game.moves({ verbose: true });
+  currentMoveEvals = verboseMoves.map(m => ({ move: m, cp: null, movingSide: mover }));
+  setStatus("Evaluating " + verboseMoves.length + " moves\u2026", "busy");
+  renderBoard();
+
+  for (const entry of currentMoveEvals) {
+    const testGame = new Chess(game.fen());
+    testGame.move(entry.move.san);
+    const cpFromMoverPerspective = await evaluateFen(testGame.fen());
+    const opponentToMove = testGame.turn();
+    entry.cp = opponentToMove === "w" ? cpFromMoverPerspective : -cpFromMoverPerspective;
+  }
+
+  evaluating = false;
+  setStatus("Engine ready \u2014 " + calibrationSource, "ready");
+  renderBoard();
+}
+
+function renderBoard() {
+  boardEl.innerHTML = "";
+  // Only highlight destination squares once a specific piece is selected -
+  // showing every piece's targets at once made it impossible to tell which
+  // piece a badge belonged to. The full ranked list (with unambiguous move
+  // notation like "d4" or "Nf3") is always visible in the side panel instead.
+  const relevantEvals = selectedSquare
+    ? currentMoveEvals.filter(e => e.move.from === selectedSquare)
+    : [];
+  const legalTargets = new Set(relevantEvals.map(e => e.move.to));
+  const band = bandSelect.value;
+
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const sq = squareId(f, r);
+      const piece = game.get(sq);
+      const div = document.createElement("div");
+      div.className = "sq " + ((f + r) % 2 === 0 ? "light" : "dark");
+
+      if (piece) {
+        div.textContent = piece.color === "w" ? PIECE_UNICODE[piece.type.toUpperCase()] : PIECE_UNICODE[piece.type];
+        div.classList.add(piece.color === "w" ? "piece-white" : "piece-black");
+      }
+      if (piece && piece.color === game.turn() && !game.game_over()) {
+        const pieceMoves = currentMoveEvals.filter(e => e.move.from === sq);
+        if (pieceMoves.length > 0) {
+          div.classList.add("selectable");
+          const band = bandSelect.value;
+          const hasGreat = pieceMoves.some(e => e.cp !== null && tagFor(moveMoverPct(e, band))?.label === "Great move");
+          const hasBlunderRisk = pieceMoves.some(e => e.cp !== null && tagFor(moveMoverPct(e, band))?.label === "Blunder");
+          if (hasGreat) div.classList.add("has-great");
+          else if (hasBlunderRisk) div.classList.add("has-blunder-risk");
+        }
+      }
+      if (sq === selectedSquare) div.classList.add("selected");
+      if (legalTargets.has(sq)) {
+        div.classList.add("legal-target");
+        // If multiple pieces can reach this square, show the best option here
+        const options = relevantEvals.filter(e => e.move.to === sq);
+        const evalData = options.reduce((best, e) => {
+          if (e.cp === null) return best;
+          if (!best || best.cp === null) return e;
+          return moveDelta(e, band) > moveDelta(best, band) ? e : best;
+        }, options[0]);
+        if (evalData) {
+          const badge = document.createElement("span");
+          if (evalData.cp === null) {
+            badge.className = "win-badge pending";
+            badge.textContent = "\u2026";
+          } else {
+            const whitePct = whiteWinPct(evalData.cp, band);
+            const moverPct = evalData.movingSide === "w" ? whitePct : (100 - whitePct);
+            const tag = tagFor(moverPct);
+            badge.className = "win-badge" + (tag ? " " + tag.cls : "");
+            badge.textContent = Math.round(moverPct) + "%";
+          }
+          div.appendChild(badge);
+        }
+      }
+      div.addEventListener("click", () => onSquareClick(sq));
+      boardEl.appendChild(div);
+    }
+  }
+  renderMoveList();
+  updateTurnBanner();
+}
+
+function renderMoveList() {
+  if (evaluating) {
+    moveListEl.innerHTML = '<p class="hint">Evaluating all legal moves\u2026 this can take a while the first time.</p>';
+    return;
+  }
+  if (currentMoveEvals.length === 0 || currentMoveEvals.some(e => e.cp === null)) {
+    moveListEl.innerHTML = '<p class="hint">Waiting for evaluation\u2026</p>';
+    return;
+  }
+  const band = bandSelect.value;
+  const relevant = selectedSquare
+    ? currentMoveEvals.filter(e => e.move.from === selectedSquare)
+    : currentMoveEvals;
+
+  const rows = relevant
+    .map(e => {
+      const whitePct = whiteWinPct(e.cp, band);
+      const moverPct = e.movingSide === "w" ? whitePct : (100 - whitePct);
+      return { san: e.move.san, pct: moverPct, tag: tagFor(moverPct) };
+    })
+    .sort((a, b) => b.pct - a.pct);
+
+  const baselineNote = baselineMoverPct !== null
+    ? `<p class="hint">Current position: ${Math.round(baselineMoverPct)}% baseline for the side to move.</p>`
+    : "";
+
+  moveListEl.innerHTML = baselineNote + rows.map((r, i) => `
+    <div class="move-row ${i === 0 ? "top" : ""}">
+      <span class="move-san">${r.san}${r.tag ? ` <span class="tag ${r.tag.cls}">${r.tag.label}</span>` : ""}</span>
+      <span class="move-pct">${Math.round(r.pct)}%</span>
+    </div>
+  `).join("");
+}
+
+function onSquareClick(sq) {
+  if (evaluating || game.game_over()) return;
+
+  // Clicking a highlighted target square plays that move (best option if
+  // more than one piece could reach it while nothing specific is selected).
+  const candidates = currentMoveEvals.filter(e => e.move.to === sq && (!selectedSquare || e.move.from === selectedSquare));
+  if (selectedSquare && candidates.length > 0) {
+    const band = bandSelect.value;
+    const best = candidates.reduce((a, b) => (moveDelta(b, band) > moveDelta(a, band) ? b : a));
+    game.move(best.move.san);
+    selectedSquare = null;
+    currentMoveEvals = [];
+    renderBoard();
+    evaluateAllMoves();
+    return;
+  }
+
+  const piece = game.get(sq);
+  if (!piece || piece.color !== game.turn()) {
+    selectedSquare = null;
+    renderBoard();
+    return;
+  }
+
+  const hasMoves = currentMoveEvals.some(e => e.move.from === sq);
+  selectedSquare = hasMoves ? sq : null;
+  renderBoard();
+}
+
+resetBtn.addEventListener("click", () => {
+  game.reset();
+  selectedSquare = null;
+  currentMoveEvals = [];
+  baselineMoverPct = null;
+  renderBoard();
+  if (engineReady) evaluateAllMoves();
+});
+
+bandSelect.addEventListener("change", () => { renderBoard(); renderOpeningStats(); });
+
+async function startUp() {
+  renderBoard();
+  setStatus("Loading calibration data\u2026", "busy");
+  await loadCalibrationTable();
+  await loadOpeningStats();
+  renderOpeningStats();
+  setStatus("Calibration: " + calibrationSource, "busy");
+  await initEngine();
+  if (engineReady) evaluateAllMoves();
+}
+
+startUp();
+</script>
+</body>
+</html>
