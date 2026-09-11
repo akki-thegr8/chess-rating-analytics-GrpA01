@@ -9,7 +9,7 @@ chess demo powered by Stockfish.
 
 ## Project Structure
 
-\`\`\`
+
 Notebooks/
   chess_data_engineering_databricks.ipynb   - Full Databricks pipeline: cleaning, feature engineering, ML
 
@@ -29,7 +29,7 @@ live-demo/
 reports/
   Chess_Analytics_Consulting_Report.docx    - Full written report
   Chess_Analytics_Presentation.pptx         - Executive slide deck
-\`\`\`
+
 
 
 ## Dataset
